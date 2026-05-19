@@ -4,7 +4,11 @@ import axios from 'axios';
 
 type Timeframe = '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
 
-const ChartWidget: React.FC = () => {
+interface Props {
+  coin: string;
+}
+
+const ChartWidget: React.FC<Props> = ({ coin }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [chart, setChart] = useState<any>(null);
   const [candlestickSeries, setCandlestickSeries] = useState<any>(null);
@@ -64,7 +68,7 @@ const ChartWidget: React.FC = () => {
       try {
         const response = await axios.get(`https://fapi.binance.com/fapi/v1/klines`, {
           params: {
-            symbol: 'BTCUSDT',
+            symbol: `${coin}USDT`,
             interval: timeframe,
             limit: 500,
           }
@@ -93,7 +97,7 @@ const ChartWidget: React.FC = () => {
       try {
         const response = await axios.get(`https://fapi.binance.com/fapi/v1/klines`, {
           params: {
-            symbol: 'BTCUSDT',
+            symbol: `${coin}USDT`,
             interval: timeframe,
             limit: 1,
           }
@@ -113,7 +117,7 @@ const ChartWidget: React.FC = () => {
     }, 2000);
 
     return () => clearInterval(interval);
-  }, [candlestickSeries, timeframe]);
+  }, [candlestickSeries, timeframe, coin]);
 
   const timeframes: Timeframe[] = ['1m', '5m', '15m', '1h', '4h', '1d'];
 

@@ -13,8 +13,8 @@ interface NewsItem {
 }
 
 const App: React.FC = () => {
-  const [prices, setPrices] = useState({ binance: '0', bybit: '0' });
-  const [prevPrices, setPrevPrices] = useState({ binance: '0', bybit: '0' });
+  const [prices, setPrices] = useState({ binance: '0', bybit: '0', bitget: '0' });
+  const [prevPrices, setPrevPrices] = useState({ binance: '0', bybit: '0', bitget: '0' });
   const [news, setNews] = useState<NewsItem[]>([{ title: 'Fetching news...', link: '#' }]);
   const [opacity, setOpacity] = useState(
     parseFloat(localStorage.getItem('btc-monitor-opacity') || '0.75')
@@ -24,19 +24,52 @@ const App: React.FC = () => {
   );
 
   const [isExpanded, setIsExpanded] = useState(false);
-  const [activeTab, setActiveTab] = useState<'chart' | 'backtest' | 'trade'>('chart');
+  const [activeTab, setActiveTab] = useState<'BINANCE' | 'BYBIT' | 'BITGET'>('BINANCE');
+
+  const [selectedCoin, setSelectedCoin] = useState('BTC');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<string[]>([]);
+  const [allCoins, setAllCoins] = useState<string[]>([]);
+  const [showSearchDropdown, setShowSearchDropdown] = useState(false);
+
+  useEffect(() => {
+    const fetchCoins = async () => {
+      try {
+        const res = await axios.get('https://fapi.binance.com/fapi/v1/exchangeInfo');
+        const symbols = res.data.symbols
+          .filter((s: any) => s.quoteAsset === 'USDT' && s.status === 'TRADING')
+          .map((s: any) => s.baseAsset);
+        setAllCoins(Array.from(new Set(symbols)) as string[]);
+      } catch (error) {
+        console.error('Error fetching coin list:', error);
+      }
+    };
+    fetchCoins();
+  }, []);
+
+  useEffect(() => {
+    if (searchQuery) {
+      setSearchResults(allCoins.filter(c => c.toLowerCase().includes(searchQuery.toLowerCase())).slice(0, 5));
+      setShowSearchDropdown(true);
+    } else {
+      setShowSearchDropdown(false);
+    }
+  }, [searchQuery, allCoins]);
 
   const fetchPrices = async () => {
     try {
-      const [binanceRes, bybitRes] = await Promise.all([
-        axios.get('https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCUSDT'),
-        axios.get('https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT')
+      const symbol = `${selectedCoin}USDT`;
+      const [binanceRes, bybitRes, bitgetRes] = await Promise.all([
+        axios.get(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${symbol}`).catch(() => ({ data: { price: '0' } })),
+        axios.get(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=${symbol}`).catch(() => ({ data: { result: { list: [{ lastPrice: '0' }] } } })),
+        axios.get(`https://api.bitget.com/api/v2/mix/market/ticker?productType=USDT-FUTURES&symbol=${symbol}`).catch(() => ({ data: { data: [{ lastPr: '0' }] } }))
       ]);
 
       setPrevPrices(prices);
       setPrices({
-        binance: parseFloat(binanceRes.data.price).toFixed(1),
-        bybit: parseFloat(bybitRes.data.result.list[0].lastPrice).toFixed(1)
+        binance: parseFloat(binanceRes.data.price).toFixed(2),
+        bybit: parseFloat(bybitRes.data.result.list[0]?.lastPrice || 0).toFixed(2),
+        bitget: parseFloat(bitgetRes.data.data[0]?.lastPr || 0).toFixed(2)
       });
     } catch (error) {
       console.error('Error fetching prices:', error);
@@ -83,7 +116,7 @@ const App: React.FC = () => {
       ipcRenderer.removeListener('set-opacity', handleSetOpacity);
       ipcRenderer.removeListener('toggle-news', handleToggleNewsIpc);
     };
-  }, [prices]); // Added prices to dependency to avoid stale closure for prevPrices, though it's fine.
+  }, [prices, selectedCoin]);
 
   const toggleExpand = () => {
     if (isExpanded) {
@@ -106,7 +139,10 @@ const App: React.FC = () => {
     return '#ffffff';
   };
 
-  const gap = (parseFloat(prices.bybit) - parseFloat(prices.binance)).toFixed(1);
+  const validPrices = [parseFloat(prices.binance), parseFloat(prices.bybit), parseFloat(prices.bitget)].filter(p => p > 0);
+  const maxPrice = validPrices.length ? Math.max(...validPrices) : 0;
+  const minPrice = validPrices.length ? Math.min(...validPrices) : 0;
+  const gap = (maxPrice - minPrice).toFixed(1);
 
   return (
     <div 
@@ -126,16 +162,38 @@ const App: React.FC = () => {
         overflow: 'hidden'
       }}
     >
-      <div style={{ position: 'absolute', top: '8px', right: '8px', display: 'flex', gap: '8px', WebkitAppRegion: 'no-drag' as any, zIndex: 10 }}>
-        <button onClick={toggleExpand} style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', opacity: 0.6 }}>
-          {isExpanded ? <Shrink size={14} /> : <Expand size={14} />}
-        </button>
-        <button onClick={() => ipcRenderer.send('window-minimize')} style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', opacity: 0.6 }}>
-          <Minus size={14} />
-        </button>
-        <button onClick={() => ipcRenderer.send('window-close')} style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', opacity: 0.6 }}>
-          <X size={14} />
-        </button>
+      {/* HEADER SECTION (Tabs + Coin Search) */}
+      <div style={{ display: 'flex', gap: '8px', marginBottom: isExpanded ? '16px' : '8px', WebkitAppRegion: 'drag' as any, alignItems: 'center' }}>
+        <button onClick={() => setActiveTab('BINANCE')} style={{ flex: 1, padding: '6px', borderRadius: '4px', border: 'none', background: activeTab === 'BINANCE' ? '#60a5fa' : 'rgba(255,255,255,0.1)', color: 'white', cursor: 'pointer', fontWeight: activeTab === 'BINANCE' ? 'bold' : 'normal', WebkitAppRegion: 'no-drag' as any }}>BINANCE</button>
+        <button onClick={() => setActiveTab('BYBIT')} style={{ flex: 1, padding: '6px', borderRadius: '4px', border: 'none', background: activeTab === 'BYBIT' ? '#60a5fa' : 'rgba(255,255,255,0.1)', color: 'white', cursor: 'pointer', fontWeight: activeTab === 'BYBIT' ? 'bold' : 'normal', WebkitAppRegion: 'no-drag' as any }}>BYBIT</button>
+        <button onClick={() => setActiveTab('BITGET')} style={{ flex: 1, padding: '6px', borderRadius: '4px', border: 'none', background: activeTab === 'BITGET' ? '#60a5fa' : 'rgba(255,255,255,0.1)', color: 'white', cursor: 'pointer', fontWeight: activeTab === 'BITGET' ? 'bold' : 'normal', WebkitAppRegion: 'no-drag' as any }}>BITGET</button>
+      </div>
+
+      <div style={{ position: 'relative', marginBottom: '8px', WebkitAppRegion: 'no-drag' as any }}>
+        <input
+          type="text"
+          placeholder="코인 검색 (예: BTC, ETH)..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          onFocus={() => { if(searchQuery) setShowSearchDropdown(true); }}
+          onBlur={() => setTimeout(() => setShowSearchDropdown(false), 200)}
+          style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: 'none', background: 'rgba(0,0,0,0.3)', color: 'white', outline: 'none' }}
+        />
+        {showSearchDropdown && (
+          <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: '#2a2e39', borderRadius: '4px', zIndex: 20, maxHeight: '150px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)', marginTop: '4px' }}>
+            {searchResults.map(coin => (
+              <div
+                key={coin}
+                onClick={() => { setSelectedCoin(coin); setSearchQuery(''); setShowSearchDropdown(false); }}
+                style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.05)' }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+              >
+                {coin}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {!isExpanded ? (
@@ -155,15 +213,23 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          <div style={{
-            marginTop: '8px',
-            fontSize: '10px',
-            textAlign: 'right',
-            color: parseFloat(gap) >= 0 ? '#f87171' : '#60a5fa',
-            fontWeight: 600,
-            marginBottom: showNews ? '4px' : '0'
-          }}>
-            GAP: {gap}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: '4px', WebkitAppRegion: 'drag' as any }}>
+            <div style={{ fontSize: '12px', opacity: 0.8, fontWeight: 500 }}>BITGET</div>
+            <div style={{ fontSize: '20px', fontWeight: 800, fontFamily: 'monospace', color: getPriceColor(prices.bitget, prevPrices.bitget) }}>
+              {prices.bitget}
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', alignItems: 'center' }}>
+            <div style={{ fontSize: '10px', opacity: 0.6 }}>{selectedCoin}</div>
+            <div style={{ fontSize: '10px', textAlign: 'right', color: '#ef5350', fontWeight: 600 }}>
+              GAP: {gap}
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'center', marginTop: '8px', gap: '8px', WebkitAppRegion: 'no-drag' as any }}>
+            <button onClick={toggleExpand} style={{ background: 'rgba(255,255,255,0.1)', border: 'none', color: 'white', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '10px' }}>▶ 펼치기</button>
+            <button onClick={() => ipcRenderer.send('window-close')} style={{ background: 'rgba(255,255,255,0.1)', border: 'none', color: 'white', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '10px' }}>✕ 닫기</button>
           </div>
 
           {showNews && (
@@ -201,51 +267,34 @@ const App: React.FC = () => {
         </div>
       ) : (
         // --- EXPANDED DASHBOARD VIEW ---
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', WebkitAppRegion: 'no-drag' as any, paddingTop: '16px' }}>
-          {/* Header Dashboard Status */}
-          <div style={{ display: 'flex', gap: '20px', marginBottom: '16px', WebkitAppRegion: 'drag' as any }}>
-            <div>
-              <div style={{ fontSize: '10px', opacity: 0.6 }}>Binance BTC/USDT</div>
-              <div style={{ fontSize: '16px', fontWeight: 'bold', color: getPriceColor(prices.binance, prevPrices.binance) }}>{prices.binance}</div>
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', WebkitAppRegion: 'no-drag' as any }}>
+
+          {/* Main Price Header for Active Tab */}
+          <div style={{ textAlign: 'center', marginBottom: '16px' }}>
+            <div style={{ fontSize: '14px', opacity: 0.8, fontWeight: 'bold' }}>{selectedCoin}/USDT ({activeTab})</div>
+            <div style={{ fontSize: '32px', fontWeight: 800, fontFamily: 'monospace', color: getPriceColor(prices[activeTab.toLowerCase() as keyof typeof prices], prevPrices[activeTab.toLowerCase() as keyof typeof prevPrices]) }}>
+              {prices[activeTab.toLowerCase() as keyof typeof prices]}
             </div>
-            <div>
-              <div style={{ fontSize: '10px', opacity: 0.6 }}>Bybit BTC/USDT</div>
-              <div style={{ fontSize: '16px', fontWeight: 'bold', color: getPriceColor(prices.bybit, prevPrices.bybit) }}>{prices.bybit}</div>
+            <div style={{ fontSize: '12px', color: '#ef5350' }}>최대 가격 갭(GAP): {gap}</div>
+          </div>
+
+          {/* Main Layout Grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: '16px', flex: 1, overflow: 'hidden' }}>
+            {/* Left Side: Chart & Backtest */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', overflowY: 'auto' }}>
+              <ChartWidget coin={selectedCoin} />
+              <BacktestWidget coin={selectedCoin} exchange={activeTab} />
             </div>
-            <div>
-              <div style={{ fontSize: '10px', opacity: 0.6 }}>Gap</div>
-              <div style={{ fontSize: '16px', fontWeight: 'bold', color: parseFloat(gap) >= 0 ? '#f87171' : '#60a5fa' }}>{gap}</div>
+
+            {/* Right Side: Trade */}
+            <div style={{ overflowY: 'auto', borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '16px' }}>
+               <TradingWidget coin={selectedCoin} exchange={activeTab} />
             </div>
           </div>
 
-          {/* Tabs */}
-          <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '8px' }}>
-            <button
-              onClick={() => setActiveTab('chart')}
-              style={{ background: activeTab === 'chart' ? 'rgba(255,255,255,0.1)' : 'transparent', border: 'none', color: 'white', padding: '6px 12px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
-            >
-              <Activity size={14} /> Chart
-            </button>
-            <button
-              onClick={() => setActiveTab('backtest')}
-              style={{ background: activeTab === 'backtest' ? 'rgba(255,255,255,0.1)' : 'transparent', border: 'none', color: 'white', padding: '6px 12px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
-            >
-              <Activity size={14} /> Backtest
-            </button>
-            <button
-              onClick={() => setActiveTab('trade')}
-              style={{ background: activeTab === 'trade' ? 'rgba(255,255,255,0.1)' : 'transparent', border: 'none', color: 'white', padding: '6px 12px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
-            >
-              <Briefcase size={14} /> Auto Trade
-            </button>
-          </div>
-
-          {/* Tab Content */}
-          <div style={{ flex: 1, overflowY: 'auto' }}>
-            {activeTab === 'chart' && <ChartWidget />}
-            {activeTab === 'backtest' && <BacktestWidget />}
-            {activeTab === 'trade' && <TradingWidget />}
-          </div>
+          <button onClick={toggleExpand} style={{ alignSelf: 'center', marginTop: '16px', background: 'rgba(255,255,255,0.1)', border: 'none', color: 'white', padding: '6px 12px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>
+            ▼ 위젯으로 돌아가기
+          </button>
         </div>
       )}
 

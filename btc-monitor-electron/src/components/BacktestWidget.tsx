@@ -5,7 +5,12 @@ import { RSI, MACD, SMA } from 'technicalindicators';
 type Strategy = 'RSI' | 'MACD' | 'SMA_CROSS';
 type Period = '1h' | '4h' | '8h' | '1d' | '1w' | '1M';
 
-const BacktestWidget: React.FC = () => {
+interface Props {
+  coin: string;
+  exchange: string;
+}
+
+const BacktestWidget: React.FC<Props> = ({ coin, exchange }) => {
   const [strategy, setStrategy] = useState<Strategy>('RSI');
   const [period, setPeriod] = useState<Period>('1d');
   const [timeframe, setTimeframe] = useState<'1m'|'5m'|'15m'>('15m');
@@ -31,9 +36,11 @@ const BacktestWidget: React.FC = () => {
     setResults(null);
     try {
       const limit = getLimitByPeriod(period, timeframe);
+      // Currently using Binance for historical data simulation regardless of active tab for simplicity,
+      // but showing the correct coin.
       const response = await axios.get(`https://fapi.binance.com/fapi/v1/klines`, {
         params: {
-          symbol: 'BTCUSDT',
+          symbol: `${coin}USDT`,
           interval: timeframe,
           limit: limit,
         }
@@ -133,10 +140,11 @@ const BacktestWidget: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '8px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '8px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px' }}>
+      <h3 style={{ margin: 0, fontSize: '14px', color: '#60a5fa' }}>{coin} 백테스트 시뮬레이션 ({exchange})</h3>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
         <div>
-          <label style={{ fontSize: '12px', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Strategy</label>
+          <label style={{ fontSize: '12px', opacity: 0.8, display: 'block', marginBottom: '4px' }}>전략 (Strategy)</label>
           <select
             value={strategy}
             onChange={(e) => setStrategy(e.target.value as Strategy)}
@@ -148,22 +156,22 @@ const BacktestWidget: React.FC = () => {
           </select>
         </div>
         <div>
-          <label style={{ fontSize: '12px', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Period</label>
+          <label style={{ fontSize: '12px', opacity: 0.8, display: 'block', marginBottom: '4px' }}>기간 (Period)</label>
           <select
             value={period}
             onChange={(e) => setPeriod(e.target.value as Period)}
             style={{ width: '100%', background: 'rgba(255,255,255,0.1)', color: 'white', border: 'none', padding: '6px', borderRadius: '4px' }}
           >
-            <option value="1h">1 Hour</option>
-            <option value="4h">4 Hours</option>
-            <option value="8h">8 Hours</option>
-            <option value="1d">1 Day</option>
-            <option value="1w">1 Week</option>
-            <option value="1M">1 Month</option>
+            <option value="1h">1시간 (1 Hour)</option>
+            <option value="4h">4시간 (4 Hours)</option>
+            <option value="8h">8시간 (8 Hours)</option>
+            <option value="1d">1일 (1 Day)</option>
+            <option value="1w">1주 (1 Week)</option>
+            <option value="1M">1달 (1 Month)</option>
           </select>
         </div>
         <div>
-          <label style={{ fontSize: '12px', opacity: 0.8, display: 'block', marginBottom: '4px' }}>Candle Timeframe</label>
+          <label style={{ fontSize: '12px', opacity: 0.8, display: 'block', marginBottom: '4px' }}>기준봉 (Timeframe)</label>
           <select
             value={timeframe}
             onChange={(e) => setTimeframe(e.target.value as any)}
@@ -190,25 +198,25 @@ const BacktestWidget: React.FC = () => {
           opacity: isLoading ? 0.7 : 1
         }}
       >
-        {isLoading ? 'Running Backtest...' : 'Run Backtest'}
+        {isLoading ? '백테스트 실행 중...' : '백테스트 실행'}
       </button>
 
       {results && (
         <div style={{ background: 'rgba(255,255,255,0.05)', padding: '12px', borderRadius: '8px' }}>
-          <h4 style={{ margin: '0 0 12px 0' }}>Results (Initial: $10,000)</h4>
+          <h4 style={{ margin: '0 0 12px 0' }}>결과 (초기자본: $10,000)</h4>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '14px' }}>
-            <div>Final Balance:</div>
+            <div>최종 자본 (Final Balance):</div>
             <div style={{ fontWeight: 'bold' }}>${results.finalBalance}</div>
 
-            <div>PnL:</div>
+            <div>순이익 (PnL):</div>
             <div style={{ fontWeight: 'bold', color: parseFloat(results.pnl) >= 0 ? '#26a69a' : '#ef5350' }}>
               ${results.pnl}
             </div>
 
-            <div>Win Rate:</div>
+            <div>승률 (Win Rate):</div>
             <div style={{ fontWeight: 'bold' }}>{results.winRate}%</div>
 
-            <div>Total Trades:</div>
+            <div>총 거래 횟수 (Total Trades):</div>
             <div style={{ fontWeight: 'bold' }}>{results.trades}</div>
           </div>
         </div>
