@@ -11,8 +11,6 @@ function createWindow() {
     height: 120,
     minWidth: 200,
     minHeight: 100,
-    maxWidth: 600,
-    maxHeight: 400,
     alwaysOnTop: true,
     frame: false,
     transparent: true,
@@ -43,6 +41,10 @@ function createWindow() {
   // 창 닫기 이벤트 (실제 종료)
   ipcMain.on('window-close', () => {
     app.quit();
+  });
+
+  ipcMain.on('resize-window', (event, width, height) => {
+    win.setSize(width, height, true);
   });
 }
 
