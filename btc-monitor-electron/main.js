@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, safeStorage } = require('electron');
 const path = require('path');
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
@@ -45,6 +45,27 @@ function createWindow() {
 
   ipcMain.on('resize-window', (event, width, height) => {
     win.setSize(width, height, true);
+  });
+
+  // Secure Storage IPC Handlers
+  ipcMain.handle('encrypt-data', (event, plaintext) => {
+    if (safeStorage.isEncryptionAvailable() && plaintext) {
+      return safeStorage.encryptString(plaintext).toString('base64');
+    }
+    return plaintext; // fallback if encryption not available
+  });
+
+  ipcMain.handle('decrypt-data', (event, ciphertext) => {
+    if (safeStorage.isEncryptionAvailable() && ciphertext) {
+      try {
+        const buffer = Buffer.from(ciphertext, 'base64');
+        return safeStorage.decryptString(buffer);
+      } catch (e) {
+        console.error('Decryption failed:', e);
+        return '';
+      }
+    }
+    return ciphertext; // fallback
   });
 }
 

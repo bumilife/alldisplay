@@ -95,29 +95,47 @@ const BacktestWidget: React.FC<Props> = ({ coin, exchange }) => {
         }
       }
 
-      // Simulate trading
+      // Simulate trading with realistic constraints
       let balance = 10000; // Starting with $10,000
       let position = 0; // BTC holding
       let trades = 0;
       let wins = 0;
 
+      const FEE_RATE = 0.0004; // 0.04% Market taker fee
+      const SLIPPAGE = 0.0005; // 0.05% assumed slippage
+      let lastEntryPrice = 0;
+
       for (let i = 0; i < signals.length; i++) {
-        const price = closes[i];
+        const rawPrice = closes[i];
+
         if (signals[i] === 'BUY' && position === 0) {
-          position = balance / price;
+          const buyPrice = rawPrice * (1 + SLIPPAGE);
+          const fee = balance * FEE_RATE;
+          const usableBalance = balance - fee;
+
+          position = usableBalance / buyPrice;
           balance = 0;
+          lastEntryPrice = buyPrice;
           trades++;
         } else if (signals[i] === 'SELL' && position > 0) {
-          const newBalance = position * price;
-          if (newBalance > 10000) wins++; // Simplified win logic
+          const sellPrice = rawPrice * (1 - SLIPPAGE);
+          const grossValue = position * sellPrice;
+          const fee = grossValue * FEE_RATE;
+
+          const newBalance = grossValue - fee;
+          if (sellPrice > lastEntryPrice) wins++; // More accurate win logic
+
           balance = newBalance;
           position = 0;
         }
       }
 
-      // Force close at end
+      // Force close at end if holding
       if (position > 0) {
-        balance = position * closes[closes.length - 1];
+        const rawPrice = closes[closes.length - 1];
+        const sellPrice = rawPrice * (1 - SLIPPAGE);
+        const grossValue = position * sellPrice;
+        balance = grossValue - (grossValue * FEE_RATE);
         position = 0;
       }
 

@@ -12,6 +12,9 @@ const ChartWidget: React.FC<Props> = ({ coin }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [chart, setChart] = useState<any>(null);
   const [candlestickSeries, setCandlestickSeries] = useState<any>(null);
+  const [sma10Series, setSma10Series] = useState<any>(null);
+  const [sma30Series, setSma30Series] = useState<any>(null);
+
   const [timeframe, setTimeframe] = useState<Timeframe>('15m');
   const [isLoading, setIsLoading] = useState(false);
 
@@ -41,7 +44,7 @@ const ChartWidget: React.FC<Props> = ({ coin }) => {
       },
     });
 
-    const newSeries = newChart.addCandlestickSeries({
+    const newCandleSeries = newChart.addCandlestickSeries({
       upColor: '#26a69a',
       downColor: '#ef5350',
       borderVisible: false,
@@ -49,8 +52,13 @@ const ChartWidget: React.FC<Props> = ({ coin }) => {
       wickDownColor: '#ef5350',
     });
 
+    const newSma10 = newChart.addLineSeries({ color: '#2962FF', lineWidth: 1, title: 'SMA 10' });
+    const newSma30 = newChart.addLineSeries({ color: '#FF6D00', lineWidth: 1, title: 'SMA 30' });
+
     setChart(newChart);
-    setCandlestickSeries(newSeries);
+    setCandlestickSeries(newCandleSeries);
+    setSma10Series(newSma10);
+    setSma30Series(newSma30);
 
     window.addEventListener('resize', handleResize);
 
@@ -62,6 +70,16 @@ const ChartWidget: React.FC<Props> = ({ coin }) => {
 
   useEffect(() => {
     if (!candlestickSeries) return;
+
+    const calculateSMA = (data: any[], period: number) => {
+      const smaData = [];
+      for (let i = period - 1; i < data.length; i++) {
+        let sum = 0;
+        for (let j = 0; j < period; j++) sum += data[i - j].close;
+        smaData.push({ time: data[i].time, value: sum / period });
+      }
+      return smaData;
+    };
 
     const fetchData = async () => {
       setIsLoading(true);
@@ -83,6 +101,12 @@ const ChartWidget: React.FC<Props> = ({ coin }) => {
         }));
 
         candlestickSeries.setData(data);
+
+        if (sma10Series && sma30Series) {
+          sma10Series.setData(calculateSMA(data, 10));
+          sma30Series.setData(calculateSMA(data, 30));
+        }
+
       } catch (error) {
         console.error('Error fetching chart data:', error);
       } finally {
@@ -92,17 +116,13 @@ const ChartWidget: React.FC<Props> = ({ coin }) => {
 
     fetchData();
 
-    // Set up polling for real-time updates
+    // Polling is simplified here; properly updating SMAs in real-time on every tick requires maintaining an array.
+    // We update just the candle for now to save performance, SMA updates on full re-fetch or timeframe change.
     const interval = setInterval(async () => {
       try {
         const response = await axios.get(`https://fapi.binance.com/fapi/v1/klines`, {
-          params: {
-            symbol: `${coin}USDT`,
-            interval: timeframe,
-            limit: 1,
-          }
+          params: { symbol: `${coin}USDT`, interval: timeframe, limit: 1 }
         });
-
         const d = response.data[0];
         candlestickSeries.update({
           time: d[0] / 1000,
@@ -117,7 +137,7 @@ const ChartWidget: React.FC<Props> = ({ coin }) => {
     }, 2000);
 
     return () => clearInterval(interval);
-  }, [candlestickSeries, timeframe, coin]);
+  }, [candlestickSeries, sma10Series, sma30Series, timeframe, coin]);
 
   const timeframes: Timeframe[] = ['1m', '5m', '15m', '1h', '4h', '1d'];
 

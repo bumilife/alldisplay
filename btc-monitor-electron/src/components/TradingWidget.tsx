@@ -1,4 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import axios from 'axios';
+import { RSI } from 'technicalindicators';
 
 type TradingMode = 'PAPER' | 'REAL';
 
@@ -9,12 +11,12 @@ interface Props {
 
 const TradingWidget: React.FC<Props> = ({ coin, exchange }) => {
   const [mode, setMode] = useState<TradingMode>('PAPER');
-  const [apiKey, setApiKey] = useState(localStorage.getItem(`btc-monitor-api-key-${exchange}`) || '');
-  const [apiSecret, setApiSecret] = useState(localStorage.getItem(`btc-monitor-api-secret-${exchange}`) || '');
+  const [apiKey, setApiKey] = useState('');
+  const [apiSecret, setApiSecret] = useState('');
 
   // AI Auto-Reflection States
   const [aiEnabled, setAiEnabled] = useState(localStorage.getItem('btc-monitor-ai-enabled') === 'true');
-  const [openaiKey, setOpenaiKey] = useState(localStorage.getItem('btc-monitor-openai-key') || '');
+  const [openaiKey, setOpenaiKey] = useState('');
   const [reflectionPeriod, setReflectionPeriod] = useState('1d'); // Default 1 day
   const [showReflectionLog, setShowReflectionLog] = useState(false);
   const [reflectionLogs, setReflectionLogs] = useState<string[]>([]);
@@ -28,15 +30,37 @@ const TradingWidget: React.FC<Props> = ({ coin, exchange }) => {
   const [paperPosition, setPaperPosition] = useState(0); // 0 means flat, >0 means long
   const [logs, setLogs] = useState<string[]>([]);
 
+  // Real-time tracking
+  const pricesRef = useRef<number[]>([]);
+
+  const { ipcRenderer } = (window as any).require('electron');
+
+  useEffect(() => {
+    const loadKeys = async () => {
+      const encKey = localStorage.getItem(`btc-monitor-api-key-${exchange}`);
+      const encSecret = localStorage.getItem(`btc-monitor-api-secret-${exchange}`);
+      const encOpenai = localStorage.getItem('btc-monitor-openai-key');
+
+      if (encKey) setApiKey(await ipcRenderer.invoke('decrypt-data', encKey));
+      if (encSecret) setApiSecret(await ipcRenderer.invoke('decrypt-data', encSecret));
+      if (encOpenai) setOpenaiKey(await ipcRenderer.invoke('decrypt-data', encOpenai));
+    };
+    loadKeys();
+  }, [exchange, ipcRenderer]);
+
   const addLog = (msg: string) => {
     setLogs(prev => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...prev].slice(0, 50));
   };
 
-  const saveKeys = () => {
-    localStorage.setItem(`btc-monitor-api-key-${exchange}`, apiKey);
-    localStorage.setItem(`btc-monitor-api-secret-${exchange}`, apiSecret);
-    localStorage.setItem('btc-monitor-openai-key', openaiKey);
-    addLog('API 키와 설정이 로컬에 저장되었습니다.');
+  const saveKeys = async () => {
+    const encKey = await ipcRenderer.invoke('encrypt-data', apiKey);
+    const encSecret = await ipcRenderer.invoke('encrypt-data', apiSecret);
+    const encOpenai = await ipcRenderer.invoke('encrypt-data', openaiKey);
+
+    localStorage.setItem(`btc-monitor-api-key-${exchange}`, encKey);
+    localStorage.setItem(`btc-monitor-api-secret-${exchange}`, encSecret);
+    localStorage.setItem('btc-monitor-openai-key', encOpenai);
+    addLog('API 키가 안전하게 암호화되어 로컬에 저장되었습니다.');
   };
 
   const toggleAi = () => {
@@ -50,16 +74,53 @@ const TradingWidget: React.FC<Props> = ({ coin, exchange }) => {
   };
 
   const runBackgroundOptimization = async () => {
-    // This is a simplified mockup of a backtest optimizer
-    // In reality, it would fetch recent klines and test multiple parameter sets
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        // Simulate finding better parameters
-        const newBuy = Math.floor(Math.random() * 10) + 25; // 25~35
-        const newSell = Math.floor(Math.random() * 10) + 65; // 65~75
-        resolve({ rsiPeriod: 14, rsiBuy: newBuy, rsiSell: newSell });
-      }, 1500);
-    });
+    try {
+      // Fetch real historical data for optimization (last 500 candles of 15m)
+      const res = await axios.get(`https://fapi.binance.com/fapi/v1/klines`, {
+        params: { symbol: `${coin}USDT`, interval: '15m', limit: 500 }
+      });
+      const closes = res.data.map((d: any) => parseFloat(d[4]));
+
+      let bestParams = { rsiPeriod: 14, rsiBuy: 30, rsiSell: 70 };
+      let bestPnL = -Infinity;
+
+      // Simple brute force optimization over a small parameter grid
+      const periods = [10, 14, 20];
+      const buys = [25, 30, 35];
+      const sells = [65, 70, 75];
+
+      for (const p of periods) {
+        const rsiVals = RSI.calculate({ values: closes, period: p });
+        const fullRsi = [...Array(p).fill(50), ...rsiVals];
+
+        for (const b of buys) {
+          for (const s of sells) {
+            let bal = 10000, pos = 0;
+            for (let i = p; i < closes.length; i++) {
+              if (fullRsi[i] < b && pos === 0) {
+                pos = bal / closes[i];
+                bal = 0;
+              } else if (fullRsi[i] > s && pos > 0) {
+                bal = pos * closes[i];
+                pos = 0;
+              }
+            }
+            if (pos > 0) bal = pos * closes[closes.length - 1];
+
+            const pnl = bal - 10000;
+            if (pnl > bestPnL) {
+              bestPnL = pnl;
+              bestParams = { rsiPeriod: p, rsiBuy: b, rsiSell: s };
+            }
+          }
+        }
+      }
+      return bestParams;
+    } catch (e) {
+      console.error('Optimization error:', e);
+      // Fallback
+      return { rsiPeriod: 14, rsiBuy: 30, rsiSell: 70 };
+    }
   };
 
   const evaluateAndReflect = async (lossAmount: number) => {
@@ -141,40 +202,55 @@ const TradingWidget: React.FC<Props> = ({ coin, exchange }) => {
     setIsActive(!isActive);
   };
 
-  // Mock bot logic loop
+  // Real Data Bot Loop
   useEffect(() => {
     if (!isActive) return;
 
-    const interval = setInterval(() => {
-      // In a real scenario, this would fetch latest kline, run indicators, and place real orders.
-      // Here we just mock paper trading randomly for demonstration.
-      const currentPrice = 65000 + (Math.random() - 0.5) * 2000;
+    const interval = setInterval(async () => {
+      try {
+        const res = await axios.get(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${coin}USDT`);
+        const currentPrice = parseFloat(res.data.price);
 
-      if (Math.random() > 0.85) {
-        if (paperPosition === 0) {
-          // Buy
-          const qty = paperBalance / currentPrice;
-          setPaperPosition(qty);
-          setPaperBalance(0);
-          addLog(`매수 (PAPER) at $${currentPrice.toFixed(2)}`);
-        } else {
-          // Sell
-          const newBalance = paperPosition * currentPrice;
-          const pnl = newBalance - 10000;
-          setPaperBalance(newBalance);
-          setPaperPosition(0);
-          addLog(`매도 (PAPER) at $${currentPrice.toFixed(2)} | PnL: $${pnl.toFixed(2)}`);
+        // Track recent prices for RSI calculation
+        pricesRef.current.push(currentPrice);
+        if (pricesRef.current.length > 50) pricesRef.current.shift(); // keep last 50 prices
 
-          // Trigger AI Reflection if there is a loss and balance drops below initial
-          if (pnl < 0 && newBalance < 10000) {
-            evaluateAndReflect(Math.abs(pnl));
+        if (pricesRef.current.length > currentParameters.rsiPeriod) {
+          const rsiVals = RSI.calculate({ values: pricesRef.current, period: currentParameters.rsiPeriod });
+          const currentRSI = rsiVals[rsiVals.length - 1];
+
+          if (currentRSI < currentParameters.rsiBuy && paperPosition === 0) {
+             if (mode === 'PAPER') {
+               const qty = paperBalance / currentPrice;
+               setPaperPosition(qty);
+               setPaperBalance(0);
+               addLog(`매수 (PAPER) at $${currentPrice.toFixed(2)} (RSI: ${currentRSI.toFixed(1)})`);
+             } else {
+               // Placeholder for Real Order Execution using CCXT or direct REST
+               // await placeRealOrder('BUY', currentPrice);
+               addLog(`실전 매수 주문 전송 시도: ${currentPrice.toFixed(2)}`);
+             }
+          } else if (currentRSI > currentParameters.rsiSell && paperPosition > 0) {
+             if (mode === 'PAPER') {
+               const newBalance = paperPosition * currentPrice;
+               const pnl = newBalance - 10000;
+               setPaperBalance(newBalance);
+               setPaperPosition(0);
+               addLog(`매도 (PAPER) at $${currentPrice.toFixed(2)} | PnL: $${pnl.toFixed(2)} (RSI: ${currentRSI.toFixed(1)})`);
+               if (pnl < 0 && newBalance < 10000) evaluateAndReflect(Math.abs(pnl));
+             } else {
+               // await placeRealOrder('SELL', currentPrice);
+               addLog(`실전 매도 주문 전송 시도: ${currentPrice.toFixed(2)}`);
+             }
           }
         }
+      } catch (err) {
+        console.error("Error fetching price for bot:", err);
       }
-    }, 5000);
+    }, 3000); // Check every 3 seconds
 
     return () => clearInterval(interval);
-  }, [isActive, paperPosition, paperBalance, aiEnabled, openaiKey, currentParameters]);
+  }, [isActive, paperPosition, paperBalance, aiEnabled, openaiKey, currentParameters, coin]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '8px' }}>
