@@ -9,8 +9,17 @@ interface Props {
 
 const TradingWidget: React.FC<Props> = ({ coin, exchange }) => {
   const [mode, setMode] = useState<TradingMode>('PAPER');
-  const [apiKey, setApiKey] = useState(localStorage.getItem('btc-monitor-api-key') || '');
-  const [apiSecret, setApiSecret] = useState(localStorage.getItem('btc-monitor-api-secret') || '');
+  const [apiKey, setApiKey] = useState(localStorage.getItem(`btc-monitor-api-key-${exchange}`) || '');
+  const [apiSecret, setApiSecret] = useState(localStorage.getItem(`btc-monitor-api-secret-${exchange}`) || '');
+
+  // AI Auto-Reflection States
+  const [aiEnabled, setAiEnabled] = useState(localStorage.getItem('btc-monitor-ai-enabled') === 'true');
+  const [openaiKey, setOpenaiKey] = useState(localStorage.getItem('btc-monitor-openai-key') || '');
+  const [reflectionPeriod, setReflectionPeriod] = useState('1d'); // Default 1 day
+  const [showReflectionLog, setShowReflectionLog] = useState(false);
+  const [reflectionLogs, setReflectionLogs] = useState<string[]>([]);
+  const [currentParameters, setCurrentParameters] = useState({ rsiPeriod: 14, rsiBuy: 30, rsiSell: 70 });
+
   const [isActive, setIsActive] = useState(false);
   const [strategy, setStrategy] = useState('RSI');
 
@@ -24,9 +33,99 @@ const TradingWidget: React.FC<Props> = ({ coin, exchange }) => {
   };
 
   const saveKeys = () => {
-    localStorage.setItem('btc-monitor-api-key', apiKey);
-    localStorage.setItem('btc-monitor-api-secret', apiSecret);
-    addLog('API keys saved locally.');
+    localStorage.setItem(`btc-monitor-api-key-${exchange}`, apiKey);
+    localStorage.setItem(`btc-monitor-api-secret-${exchange}`, apiSecret);
+    localStorage.setItem('btc-monitor-openai-key', openaiKey);
+    addLog('API 키와 설정이 로컬에 저장되었습니다.');
+  };
+
+  const toggleAi = () => {
+    const newVal = !aiEnabled;
+    setAiEnabled(newVal);
+    localStorage.setItem('btc-monitor-ai-enabled', newVal.toString());
+  };
+
+  const addReflectionLog = (msg: string) => {
+    setReflectionLogs(prev => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...prev].slice(0, 20));
+  };
+
+  const runBackgroundOptimization = async () => {
+    // This is a simplified mockup of a backtest optimizer
+    // In reality, it would fetch recent klines and test multiple parameter sets
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        // Simulate finding better parameters
+        const newBuy = Math.floor(Math.random() * 10) + 25; // 25~35
+        const newSell = Math.floor(Math.random() * 10) + 65; // 65~75
+        resolve({ rsiPeriod: 14, rsiBuy: newBuy, rsiSell: newSell });
+      }, 1500);
+    });
+  };
+
+  const evaluateAndReflect = async (lossAmount: number) => {
+    if (!aiEnabled || !openaiKey) {
+      addReflectionLog(`손실 감지 ($${lossAmount.toFixed(2)}). AI 회고가 꺼져있어 계속 진행합니다.`);
+      return;
+    }
+
+    setIsActive(false); // Pause bot
+    addReflectionLog(`손실 감지 ($${lossAmount.toFixed(2)}). 봇을 일시정지하고 AI 회고를 시작합니다...`);
+
+    try {
+      addReflectionLog('백그라운드 파라미터 최적화 진행 중...');
+      const optimizedParams: any = await runBackgroundOptimization();
+
+      addReflectionLog('OpenAI API를 통한 시장 상황 분석 요청...');
+
+      // Call OpenAI API
+      const prompt = `
+        현재 암호화폐 거래 봇이 손실을 기록했습니다.
+        코인: ${coin}
+        최근 손실액: $${lossAmount.toFixed(2)}
+        현재 파라미터: RSI Buy ${currentParameters.rsiBuy}, RSI Sell ${currentParameters.rsiSell}
+        백그라운드 최적화로 찾은 새 파라미터 후보: RSI Buy ${optimizedParams.rsiBuy}, RSI Sell ${optimizedParams.rsiSell}
+
+        새로운 파라미터를 적용하는 것이 좋을지, 아니면 시장의 변동성이 너무 커서 봇을 계속 정지시켜야 할지 1~2문장으로 조언해주고,
+        마지막 줄에 반드시 "결정: 적용" 또는 "결정: 정지" 라고 적어주세요.
+      `;
+
+      // NOTE: Using a real OpenAI API call here.
+      // Handled errors gracefully if key is invalid.
+      const res = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${openaiKey}`
+        },
+        body: JSON.stringify({
+          model: 'gpt-3.5-turbo',
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 150
+        })
+      });
+
+      if (!res.ok) {
+        throw new Error('OpenAI API 호출 실패 (키 확인 필요)');
+      }
+
+      const data = await res.json();
+      const aiResponse = data.choices[0].message.content;
+
+      addReflectionLog(`[AI 분석] ${aiResponse}`);
+
+      if (aiResponse.includes('적용')) {
+        setCurrentParameters(optimizedParams);
+        addReflectionLog(`새로운 파라미터로 업데이트 됨: Buy ${optimizedParams.rsiBuy}, Sell ${optimizedParams.rsiSell}`);
+        addReflectionLog('봇을 자동으로 재시작합니다.');
+        setIsActive(true);
+      } else {
+        addReflectionLog('AI의 판단에 따라 봇 작동을 계속 중지 상태로 유지합니다.');
+      }
+
+    } catch (error: any) {
+      addReflectionLog(`AI 회고 중 오류 발생: ${error.message}`);
+      addReflectionLog('봇 작동을 중지 상태로 유지합니다.');
+    }
   };
 
   const toggleBot = () => {
@@ -35,7 +134,7 @@ const TradingWidget: React.FC<Props> = ({ coin, exchange }) => {
         alert('실전 투자를 위해서는 API 키를 입력해야 합니다.');
         return;
       }
-      addLog(`${exchange}에서 ${coin} 봇이 ${mode} 모드로 시작되었습니다. (${strategy} 전략)`);
+      addLog(`${exchange}에서 ${coin} 봇이 ${mode} 모드로 시작되었습니다. (전략: ${strategy}, 설정: Buy ${currentParameters.rsiBuy} Sell ${currentParameters.rsiSell})`);
     } else {
       addLog('봇이 중지되었습니다.');
     }
@@ -49,28 +148,33 @@ const TradingWidget: React.FC<Props> = ({ coin, exchange }) => {
     const interval = setInterval(() => {
       // In a real scenario, this would fetch latest kline, run indicators, and place real orders.
       // Here we just mock paper trading randomly for demonstration.
-      const currentPrice = 65000 + Math.random() * 1000;
+      const currentPrice = 65000 + (Math.random() - 0.5) * 2000;
 
-      if (Math.random() > 0.9) {
+      if (Math.random() > 0.85) {
         if (paperPosition === 0) {
           // Buy
           const qty = paperBalance / currentPrice;
           setPaperPosition(qty);
           setPaperBalance(0);
-          addLog(`PAPER BUY at $${currentPrice.toFixed(2)}`);
+          addLog(`매수 (PAPER) at $${currentPrice.toFixed(2)}`);
         } else {
           // Sell
           const newBalance = paperPosition * currentPrice;
           const pnl = newBalance - 10000;
           setPaperBalance(newBalance);
           setPaperPosition(0);
-          addLog(`PAPER SELL at $${currentPrice.toFixed(2)} | PnL: $${pnl.toFixed(2)}`);
+          addLog(`매도 (PAPER) at $${currentPrice.toFixed(2)} | PnL: $${pnl.toFixed(2)}`);
+
+          // Trigger AI Reflection if there is a loss and balance drops below initial
+          if (pnl < 0 && newBalance < 10000) {
+            evaluateAndReflect(Math.abs(pnl));
+          }
         }
       }
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [isActive, paperPosition, paperBalance]);
+  }, [isActive, paperPosition, paperBalance, aiEnabled, openaiKey, currentParameters]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '8px' }}>
@@ -96,29 +200,68 @@ const TradingWidget: React.FC<Props> = ({ coin, exchange }) => {
         </button>
       </div>
 
-      {/* Real Trading API Keys Input */}
-      {mode === 'REAL' && (
-        <div style={{ background: 'rgba(255,255,255,0.05)', padding: '12px', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          <p style={{ margin: 0, fontSize: '12px', color: '#f87171' }}>⚠️ API 키는 로컬에만 저장됩니다. 실전 투자는 위험을 동반합니다.</p>
-          <input
-            type="text"
-            placeholder={`${exchange} API Key`}
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            style={{ width: '100%', padding: '8px', borderRadius: '4px', border: 'none', background: 'rgba(0,0,0,0.2)', color: 'white' }}
-          />
-          <input
-            type="password"
-            placeholder={`${exchange} API Secret`}
-            value={apiSecret}
-            onChange={(e) => setApiSecret(e.target.value)}
-            style={{ width: '100%', padding: '8px', borderRadius: '4px', border: 'none', background: 'rgba(0,0,0,0.2)', color: 'white' }}
-          />
-          <button onClick={saveKeys} style={{ background: 'rgba(255,255,255,0.1)', border: 'none', color: 'white', padding: '6px', borderRadius: '4px', cursor: 'pointer' }}>
-            저장 (Save Keys)
+      {/* API Keys Input */}
+      <div style={{ background: 'rgba(255,255,255,0.05)', padding: '12px', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {mode === 'REAL' && (
+          <>
+            <p style={{ margin: 0, fontSize: '12px', color: '#f87171' }}>⚠️ 거래소 API 키는 로컬에만 저장됩니다.</p>
+            <input
+              type="text"
+              placeholder={`${exchange} API Key`}
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              style={{ width: '100%', padding: '8px', borderRadius: '4px', border: 'none', background: 'rgba(0,0,0,0.2)', color: 'white' }}
+            />
+            <input
+              type="password"
+              placeholder={`${exchange} API Secret`}
+              value={apiSecret}
+              onChange={(e) => setApiSecret(e.target.value)}
+              style={{ width: '100%', padding: '8px', borderRadius: '4px', border: 'none', background: 'rgba(0,0,0,0.2)', color: 'white' }}
+            />
+          </>
+        )}
+
+        <p style={{ margin: '8px 0 0 0', fontSize: '12px', color: '#60a5fa' }}>🧠 AI 자동 회고를 위한 OpenAI 키 (선택사항)</p>
+        <input
+          type="password"
+          placeholder="OpenAI API Key (sk-...)"
+          value={openaiKey}
+          onChange={(e) => setOpenaiKey(e.target.value)}
+          style={{ width: '100%', padding: '8px', borderRadius: '4px', border: 'none', background: 'rgba(0,0,0,0.2)', color: 'white' }}
+        />
+        <button onClick={saveKeys} style={{ background: 'rgba(255,255,255,0.1)', border: 'none', color: 'white', padding: '6px', borderRadius: '4px', cursor: 'pointer', marginTop: '4px' }}>
+          설정 저장
+        </button>
+      </div>
+
+      {/* AI Auto-Reflection Settings */}
+      <div style={{ background: 'rgba(255,255,255,0.05)', padding: '12px', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <label style={{ fontSize: '12px', fontWeight: 'bold', color: aiEnabled ? '#26a69a' : 'gray' }}>
+            {aiEnabled ? '✅ AI 자동 회고 켜짐' : '❌ AI 자동 회고 꺼짐'}
+          </label>
+          <button onClick={toggleAi} style={{ background: aiEnabled ? '#ef5350' : '#26a69a', color: 'white', border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '10px' }}>
+            {aiEnabled ? '끄기' : '켜기'}
           </button>
         </div>
-      )}
+
+        {aiEnabled && (
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <label style={{ fontSize: '11px', opacity: 0.8 }}>손실 감지 기준 기간:</label>
+            <select
+              value={reflectionPeriod}
+              onChange={(e) => setReflectionPeriod(e.target.value)}
+              style={{ background: 'rgba(0,0,0,0.2)', color: 'white', border: 'none', padding: '4px', borderRadius: '4px', fontSize: '11px' }}
+            >
+              <option value="1h">1시간</option>
+              <option value="4h">4시간</option>
+              <option value="1d">1일 (디폴트)</option>
+              <option value="1w">1주</option>
+            </select>
+          </div>
+        )}
+      </div>
 
       {/* Settings */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
@@ -175,10 +318,25 @@ const TradingWidget: React.FC<Props> = ({ coin, exchange }) => {
         </div>
       )}
 
-      {/* Logs */}
+      {/* Reflection & Logs Toggle */}
+      <div style={{ display: 'flex', gap: '8px' }}>
+        <button onClick={() => setShowReflectionLog(false)} style={{ flex: 1, padding: '4px', borderRadius: '4px', border: 'none', background: !showReflectionLog ? 'rgba(255,255,255,0.1)' : 'transparent', color: 'white', fontSize: '11px', cursor: 'pointer' }}>거래 로그</button>
+        <button onClick={() => setShowReflectionLog(true)} style={{ flex: 1, padding: '4px', borderRadius: '4px', border: 'none', background: showReflectionLog ? 'rgba(255,255,255,0.1)' : 'transparent', color: 'white', fontSize: '11px', cursor: 'pointer' }}>회고 로그 (AI)</button>
+      </div>
+
+      {/* Logs View */}
       <div style={{ background: 'rgba(0,0,0,0.2)', padding: '8px', borderRadius: '8px', height: '100px', overflowY: 'auto', fontSize: '10px', fontFamily: 'monospace' }}>
-        {logs.map((log, i) => <div key={i} style={{ marginBottom: '2px', opacity: 0.8 }}>{log}</div>)}
-        {logs.length === 0 && <span style={{ opacity: 0.5 }}>No activity...</span>}
+        {!showReflectionLog ? (
+          <>
+            {logs.map((log, i) => <div key={i} style={{ marginBottom: '2px', opacity: 0.8 }}>{log}</div>)}
+            {logs.length === 0 && <span style={{ opacity: 0.5 }}>거래 기록이 없습니다...</span>}
+          </>
+        ) : (
+          <>
+            {reflectionLogs.map((log, i) => <div key={i} style={{ marginBottom: '2px', color: '#60a5fa' }}>{log}</div>)}
+            {reflectionLogs.length === 0 && <span style={{ opacity: 0.5 }}>AI 회고 기록이 없습니다...</span>}
+          </>
+        )}
       </div>
 
     </div>

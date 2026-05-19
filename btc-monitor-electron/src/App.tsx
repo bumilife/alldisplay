@@ -65,11 +65,13 @@ const App: React.FC = () => {
         axios.get(`https://api.bitget.com/api/v2/mix/market/ticker?productType=USDT-FUTURES&symbol=${symbol}`).catch(() => ({ data: { data: [{ lastPr: '0' }] } }))
       ]);
 
-      setPrevPrices(prices);
-      setPrices({
-        binance: parseFloat(binanceRes.data.price).toFixed(2),
-        bybit: parseFloat(bybitRes.data.result.list[0]?.lastPrice || 0).toFixed(2),
-        bitget: parseFloat(bitgetRes.data.data[0]?.lastPr || 0).toFixed(2)
+      setPrices(prev => {
+        setPrevPrices(prev);
+        return {
+          binance: parseFloat(binanceRes.data.price).toFixed(2),
+          bybit: parseFloat(bybitRes.data.result.list[0]?.lastPrice || 0).toFixed(2),
+          bitget: parseFloat(bitgetRes.data.data[0]?.lastPr || 0).toFixed(2)
+        };
       });
     } catch (error) {
       console.error('Error fetching prices:', error);
@@ -116,7 +118,7 @@ const App: React.FC = () => {
       ipcRenderer.removeListener('set-opacity', handleSetOpacity);
       ipcRenderer.removeListener('toggle-news', handleToggleNewsIpc);
     };
-  }, [prices, selectedCoin]);
+  }, [selectedCoin]);
 
   const toggleExpand = () => {
     if (isExpanded) {
