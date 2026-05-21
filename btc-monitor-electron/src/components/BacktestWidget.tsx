@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import axios from 'axios';
 import { RSI, MACD, SMA } from 'technicalindicators';
 
 type Strategy = 'RSI' | 'MACD' | 'SMA_CROSS';
@@ -9,6 +8,8 @@ interface Props {
   coin: string;
   exchange: string;
 }
+
+const { ipcRenderer } = (window as any).require('electron');
 
 const BacktestWidget: React.FC<Props> = ({ coin, exchange }) => {
   const [strategy, setStrategy] = useState<Strategy>('RSI');
@@ -36,17 +37,15 @@ const BacktestWidget: React.FC<Props> = ({ coin, exchange }) => {
     setResults(null);
     try {
       const limit = getLimitByPeriod(period, timeframe);
-      // Currently using Binance for historical data simulation regardless of active tab for simplicity,
-      // but showing the correct coin.
-      const response = await axios.get(`https://fapi.binance.com/fapi/v1/klines`, {
-        params: {
-          symbol: `${coin}USDT`,
-          interval: timeframe,
-          limit: limit,
-        }
+
+      const ohlcv = await ipcRenderer.invoke('ccxt-fetch-ohlcv', {
+        exchange: exchange.toLowerCase(),
+        symbol: coin,
+        timeframe: timeframe,
+        limit: limit
       });
 
-      const closes = response.data.map((d: any) => parseFloat(d[4]));
+      const closes = ohlcv.map((d: any) => parseFloat(d[4]));
 
       let signals: ('BUY'|'SELL'|'HOLD')[] = [];
 

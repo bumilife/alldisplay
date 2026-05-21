@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, Tray, Menu, safeStorage } = require('electron');
 const path = require('path');
+const ccxt = require('ccxt');
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
 let tray = null;
@@ -66,6 +67,64 @@ function createWindow() {
       }
     }
     return ciphertext; // fallback
+  });
+
+  // CCXT IPC Handlers
+  const getExchangeInstance = (exchangeId, apiKey = '', secret = '') => {
+    const exchangeClass = ccxt[exchangeId.toLowerCase()];
+    if (!exchangeClass) throw new Error(`Unsupported exchange: ${exchangeId}`);
+
+    return new exchangeClass({
+      apiKey,
+      secret,
+      options: { defaultType: 'future' }, // We are dealing with USDT futures
+      enableRateLimit: true,
+    });
+  };
+
+  ipcMain.handle('ccxt-fetch-ohlcv', async (event, { exchange, symbol, timeframe, limit }) => {
+    try {
+      const ex = getExchangeInstance(exchange);
+      // symbol comes as BTCUSDT, ccxt needs BTC/USDT:USDT for futures usually, but simple loadMarkets handling is better
+      await ex.loadMarkets();
+      // find the correct symbol format for the exchange
+      let formattedSymbol = `${symbol}/USDT:USDT`;
+      if (exchange.toLowerCase() === 'binance') formattedSymbol = `${symbol}/USDT:USDT`;
+      else if (exchange.toLowerCase() === 'bybit') formattedSymbol = `${symbol}/USDT:USDT`;
+      else if (exchange.toLowerCase() === 'bitget') formattedSymbol = `${symbol}/USDT:USDT`;
+
+      const ohlcv = await ex.fetchOHLCV(formattedSymbol, timeframe, undefined, limit);
+      return ohlcv;
+    } catch (e) {
+      console.error('CCXT fetchOHLCV Error:', e.message);
+      throw e;
+    }
+  });
+
+  ipcMain.handle('ccxt-fetch-balance', async (event, { exchange, apiKey, secret }) => {
+    try {
+      if (!apiKey || !secret) throw new Error('API keys required for balance');
+      const ex = getExchangeInstance(exchange, apiKey, secret);
+      const balance = await ex.fetchBalance();
+      return balance.USDT ? balance.USDT.total : 0;
+    } catch (e) {
+      console.error('CCXT fetchBalance Error:', e.message);
+      throw e;
+    }
+  });
+
+  ipcMain.handle('ccxt-create-market-order', async (event, { exchange, apiKey, secret, symbol, side, amount }) => {
+    try {
+      if (!apiKey || !secret) throw new Error('API keys required for trading');
+      const ex = getExchangeInstance(exchange, apiKey, secret);
+      await ex.loadMarkets();
+      let formattedSymbol = `${symbol}/USDT:USDT`;
+      const order = await ex.createMarketOrder(formattedSymbol, side, amount);
+      return order;
+    } catch (e) {
+      console.error('CCXT createMarketOrder Error:', e.message);
+      throw e;
+    }
   });
 }
 

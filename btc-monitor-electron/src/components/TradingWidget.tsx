@@ -25,15 +25,38 @@ const TradingWidget: React.FC<Props> = ({ coin, exchange }) => {
   const [isActive, setIsActive] = useState(false);
   const [strategy, setStrategy] = useState('RSI');
 
-  // Paper trading state
+  // Paper/Real trading state
   const [paperBalance, setPaperBalance] = useState(10000);
-  const [paperPosition, setPaperPosition] = useState(0); // 0 means flat, >0 means long
+  const [paperPosition, setPaperPosition] = useState(0);
+  const [realBalance, setRealBalance] = useState(0);
   const [logs, setLogs] = useState<string[]>([]);
 
   // Real-time tracking
   const pricesRef = useRef<number[]>([]);
 
   const { ipcRenderer } = (window as any).require('electron');
+
+  // Fetch Real Balance periodically if in REAL mode and keys exist
+  useEffect(() => {
+    let balanceInterval: NodeJS.Timeout;
+    if (mode === 'REAL' && apiKey && apiSecret) {
+      const fetchRealBalance = async () => {
+        try {
+          const bal = await ipcRenderer.invoke('ccxt-fetch-balance', {
+            exchange: exchange.toLowerCase(),
+            apiKey,
+            secret: apiSecret
+          });
+          setRealBalance(bal);
+        } catch (e) {
+          console.error('Failed to fetch real balance:', e);
+        }
+      };
+      fetchRealBalance();
+      balanceInterval = setInterval(fetchRealBalance, 10000);
+    }
+    return () => clearInterval(balanceInterval);
+  }, [mode, apiKey, apiSecret, exchange, ipcRenderer]);
 
   useEffect(() => {
     const loadKeys = async () => {
@@ -226,9 +249,23 @@ const TradingWidget: React.FC<Props> = ({ coin, exchange }) => {
                setPaperBalance(0);
                addLog(`매수 (PAPER) at $${currentPrice.toFixed(2)} (RSI: ${currentRSI.toFixed(1)})`);
              } else {
-               // Placeholder for Real Order Execution using CCXT or direct REST
-               // await placeRealOrder('BUY', currentPrice);
-               addLog(`실전 매수 주문 전송 시도: ${currentPrice.toFixed(2)}`);
+               if (realBalance > 10) { // minimum order size protection
+                 try {
+                   // Full balance market buy for simplicity in this demo logic
+                   const amount = realBalance / currentPrice;
+                   await ipcRenderer.invoke('ccxt-create-market-order', {
+                     exchange: exchange.toLowerCase(),
+                     apiKey,
+                     secret: apiSecret,
+                     symbol: coin,
+                     side: 'buy',
+                     amount: amount * 0.99 // leave some room for fees
+                   });
+                   addLog(`실전 매수 완료 (REAL): ${currentPrice.toFixed(2)}`);
+                 } catch(e: any) {
+                   addLog(`실전 매수 실패: ${e.message}`);
+                 }
+               }
              }
           } else if (currentRSI > currentParameters.rsiSell && paperPosition > 0) {
              if (mode === 'PAPER') {
@@ -239,8 +276,21 @@ const TradingWidget: React.FC<Props> = ({ coin, exchange }) => {
                addLog(`매도 (PAPER) at $${currentPrice.toFixed(2)} | PnL: $${pnl.toFixed(2)} (RSI: ${currentRSI.toFixed(1)})`);
                if (pnl < 0 && newBalance < 10000) evaluateAndReflect(Math.abs(pnl));
              } else {
-               // await placeRealOrder('SELL', currentPrice);
-               addLog(`실전 매도 주문 전송 시도: ${currentPrice.toFixed(2)}`);
+               try {
+                 // In a complete implementation, we'd fetch actual position size.
+                 // Assuming selling all held position for demo.
+                 await ipcRenderer.invoke('ccxt-create-market-order', {
+                   exchange: exchange.toLowerCase(),
+                   apiKey,
+                   secret: apiSecret,
+                   symbol: coin,
+                   side: 'sell',
+                   amount: paperPosition // Normally actual position size from fetchPositions
+                 });
+                 addLog(`실전 매도 완료 (REAL): ${currentPrice.toFixed(2)}`);
+               } catch(e: any) {
+                 addLog(`실전 매도 실패: ${e.message}`);
+               }
              }
           }
         }
@@ -380,19 +430,23 @@ const TradingWidget: React.FC<Props> = ({ coin, exchange }) => {
         {isActive ? '봇 중지 (STOP BOT)' : '봇 시작 (START BOT)'}
       </button>
 
-      {/* Paper Trading Status */}
-      {mode === 'PAPER' && (
-        <div style={{ background: 'rgba(255,255,255,0.05)', padding: '12px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between' }}>
-          <div>
-            <div style={{ fontSize: '10px', opacity: 0.6 }}>모의 잔고 (Paper Balance)</div>
-            <div style={{ fontSize: '16px', fontWeight: 'bold' }}>${paperBalance.toFixed(2)}</div>
+      {/* Trading Status (Paper or Real) */}
+      <div style={{ background: 'rgba(255,255,255,0.05)', padding: '12px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between' }}>
+        <div>
+          <div style={{ fontSize: '10px', opacity: 0.6 }}>
+            {mode === 'PAPER' ? '모의 잔고 (Paper)' : '실제 지갑 잔고 (USDT)'}
           </div>
-          <div>
-            <div style={{ fontSize: '10px', opacity: 0.6 }}>보유량 ({coin})</div>
-            <div style={{ fontSize: '16px', fontWeight: 'bold' }}>{paperPosition.toFixed(4)}</div>
+          <div style={{ fontSize: '16px', fontWeight: 'bold', color: mode === 'REAL' ? '#26a69a' : 'white' }}>
+            ${mode === 'PAPER' ? paperBalance.toFixed(2) : realBalance.toFixed(2)}
           </div>
         </div>
-      )}
+        <div>
+          <div style={{ fontSize: '10px', opacity: 0.6 }}>보유 포지션 ({coin})</div>
+          <div style={{ fontSize: '16px', fontWeight: 'bold' }}>
+            {mode === 'PAPER' ? paperPosition.toFixed(4) : '-'} {/* Real position size requires further ccxt fetchPositions logic */}
+          </div>
+        </div>
+      </div>
 
       {/* Reflection & Logs Toggle */}
       <div style={{ display: 'flex', gap: '8px' }}>

@@ -6,9 +6,12 @@ type Timeframe = '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
 
 interface Props {
   coin: string;
+  exchange: string;
 }
 
-const ChartWidget: React.FC<Props> = ({ coin }) => {
+const { ipcRenderer } = (window as any).require('electron');
+
+const ChartWidget: React.FC<Props> = ({ coin, exchange }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [chart, setChart] = useState<any>(null);
   const [candlestickSeries, setCandlestickSeries] = useState<any>(null);
@@ -84,15 +87,14 @@ const ChartWidget: React.FC<Props> = ({ coin }) => {
     const fetchData = async () => {
       setIsLoading(true);
       try {
-        const response = await axios.get(`https://fapi.binance.com/fapi/v1/klines`, {
-          params: {
-            symbol: `${coin}USDT`,
-            interval: timeframe,
-            limit: 500,
-          }
+        const ohlcv = await ipcRenderer.invoke('ccxt-fetch-ohlcv', {
+          exchange: exchange.toLowerCase(),
+          symbol: coin,
+          timeframe: timeframe,
+          limit: 500
         });
 
-        const data = response.data.map((d: any) => ({
+        const data = ohlcv.map((d: any) => ({
           time: d[0] / 1000,
           open: parseFloat(d[1]),
           high: parseFloat(d[2]),
@@ -108,7 +110,7 @@ const ChartWidget: React.FC<Props> = ({ coin }) => {
         }
 
       } catch (error) {
-        console.error('Error fetching chart data:', error);
+        console.error(`Error fetching chart data from ${exchange}:`, error);
       } finally {
         setIsLoading(false);
       }
@@ -116,28 +118,33 @@ const ChartWidget: React.FC<Props> = ({ coin }) => {
 
     fetchData();
 
-    // Polling is simplified here; properly updating SMAs in real-time on every tick requires maintaining an array.
-    // We update just the candle for now to save performance, SMA updates on full re-fetch or timeframe change.
+    // Polling using CCXT
     const interval = setInterval(async () => {
       try {
-        const response = await axios.get(`https://fapi.binance.com/fapi/v1/klines`, {
-          params: { symbol: `${coin}USDT`, interval: timeframe, limit: 1 }
+        const ohlcv = await ipcRenderer.invoke('ccxt-fetch-ohlcv', {
+          exchange: exchange.toLowerCase(),
+          symbol: coin,
+          timeframe: timeframe,
+          limit: 1
         });
-        const d = response.data[0];
-        candlestickSeries.update({
-          time: d[0] / 1000,
-          open: parseFloat(d[1]),
-          high: parseFloat(d[2]),
-          low: parseFloat(d[3]),
-          close: parseFloat(d[4]),
-        });
+
+        if (ohlcv && ohlcv.length > 0) {
+          const d = ohlcv[0];
+          candlestickSeries.update({
+            time: d[0] / 1000,
+            open: parseFloat(d[1]),
+            high: parseFloat(d[2]),
+            low: parseFloat(d[3]),
+            close: parseFloat(d[4]),
+          });
+        }
       } catch (error) {
         console.error('Error fetching real-time chart data:', error);
       }
-    }, 2000);
+    }, 3000);
 
     return () => clearInterval(interval);
-  }, [candlestickSeries, sma10Series, sma30Series, timeframe, coin]);
+  }, [candlestickSeries, sma10Series, sma30Series, timeframe, coin, exchange]);
 
   const timeframes: Timeframe[] = ['1m', '5m', '15m', '1h', '4h', '1d'];
 
