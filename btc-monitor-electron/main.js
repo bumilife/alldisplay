@@ -113,13 +113,33 @@ function createWindow() {
     }
   });
 
-  ipcMain.handle('ccxt-create-market-order', async (event, { exchange, apiKey, secret, symbol, side, amount }) => {
+  ipcMain.handle('ccxt-fetch-position', async (event, { exchange, apiKey, secret, symbol }) => {
+    try {
+      if (!apiKey || !secret) throw new Error('API keys required for positions');
+      const ex = getExchangeInstance(exchange, apiKey, secret);
+      await ex.loadMarkets();
+      const formattedSymbol = `${symbol}/USDT:USDT`;
+      const positions = await ex.fetchPositions([formattedSymbol]);
+      const long = positions.find(p => p.symbol === formattedSymbol && p.side === 'long' && p.contracts > 0);
+      if (!long) return 0;
+      const contractSize = ex.market(formattedSymbol).contractSize || 1;
+      return long.contracts * contractSize;
+    } catch (e) {
+      console.error('CCXT fetchPositions Error:', e.message);
+      throw e;
+    }
+  });
+
+  ipcMain.handle('ccxt-create-market-order', async (event, { exchange, apiKey, secret, symbol, side, amount, reduceOnly }) => {
     try {
       if (!apiKey || !secret) throw new Error('API keys required for trading');
       const ex = getExchangeInstance(exchange, apiKey, secret);
       await ex.loadMarkets();
-      let formattedSymbol = `${symbol}/USDT:USDT`;
-      const order = await ex.createMarketOrder(formattedSymbol, side, amount);
+      const formattedSymbol = `${symbol}/USDT:USDT`;
+      const preciseAmount = parseFloat(ex.amountToPrecision(formattedSymbol, amount));
+      if (!(preciseAmount > 0)) throw new Error(`Order amount too small: ${amount}`);
+      const params = reduceOnly ? { reduceOnly: true } : {};
+      const order = await ex.createMarketOrder(formattedSymbol, side, preciseAmount, undefined, params);
       return order;
     } catch (e) {
       console.error('CCXT createMarketOrder Error:', e.message);

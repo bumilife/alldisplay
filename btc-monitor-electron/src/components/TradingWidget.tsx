@@ -28,7 +28,9 @@ const TradingWidget: React.FC<Props> = ({ coin, exchange }) => {
   // Paper/Real trading state
   const [paperBalance, setPaperBalance] = useState(10000);
   const [paperPosition, setPaperPosition] = useState(0);
+  const [paperEntryCost, setPaperEntryCost] = useState(0);
   const [realBalance, setRealBalance] = useState(0);
+  const [realPosition, setRealPosition] = useState(0);
   const [logs, setLogs] = useState<string[]>([]);
 
   // Real-time tracking
@@ -38,7 +40,7 @@ const TradingWidget: React.FC<Props> = ({ coin, exchange }) => {
 
   // Fetch Real Balance periodically if in REAL mode and keys exist
   useEffect(() => {
-    let balanceInterval: NodeJS.Timeout;
+    let balanceInterval: ReturnType<typeof setInterval> | undefined;
     if (mode === 'REAL' && apiKey && apiSecret) {
       const fetchRealBalance = async () => {
         try {
@@ -48,15 +50,22 @@ const TradingWidget: React.FC<Props> = ({ coin, exchange }) => {
             secret: apiSecret
           });
           setRealBalance(bal);
+          const pos = await ipcRenderer.invoke('ccxt-fetch-position', {
+            exchange: exchange.toLowerCase(),
+            apiKey,
+            secret: apiSecret,
+            symbol: coin
+          });
+          setRealPosition(pos);
         } catch (e) {
-          console.error('Failed to fetch real balance:', e);
+          console.error('Failed to fetch real balance/position:', e);
         }
       };
       fetchRealBalance();
       balanceInterval = setInterval(fetchRealBalance, 10000);
     }
     return () => clearInterval(balanceInterval);
-  }, [mode, apiKey, apiSecret, exchange, ipcRenderer]);
+  }, [mode, apiKey, apiSecret, exchange, coin, ipcRenderer]);
 
   useEffect(() => {
     const loadKeys = async () => {
@@ -225,82 +234,102 @@ const TradingWidget: React.FC<Props> = ({ coin, exchange }) => {
     setIsActive(!isActive);
   };
 
+  // Latest values for the bot loop, so the interval never acts on stale state
+  const latestRef = useRef({ mode, apiKey, apiSecret, realBalance, paperBalance, paperPosition, paperEntryCost, currentParameters, evaluateAndReflect });
+  latestRef.current = { mode, apiKey, apiSecret, realBalance, paperBalance, paperPosition, paperEntryCost, currentParameters, evaluateAndReflect };
+
+  // Stop the bot when the trading context changes underneath it
+  useEffect(() => {
+    setIsActive(prev => {
+      if (prev) addLog('모드/거래소/코인이 변경되어 봇을 중지했습니다.');
+      return false;
+    });
+    pricesRef.current = [];
+  }, [mode, exchange, coin]);
+
   // Real Data Bot Loop
   useEffect(() => {
     if (!isActive) return;
 
+    let busy = false;
     const interval = setInterval(async () => {
+      if (busy) return;
+      busy = true;
       try {
         const res = await axios.get(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${coin}USDT`);
         const currentPrice = parseFloat(res.data.price);
+        const { mode, apiKey, apiSecret, realBalance, paperBalance, paperPosition, paperEntryCost, currentParameters, evaluateAndReflect } = latestRef.current;
 
         // Track recent prices for RSI calculation
         pricesRef.current.push(currentPrice);
         if (pricesRef.current.length > 50) pricesRef.current.shift(); // keep last 50 prices
 
-        if (pricesRef.current.length > currentParameters.rsiPeriod) {
-          const rsiVals = RSI.calculate({ values: pricesRef.current, period: currentParameters.rsiPeriod });
-          const currentRSI = rsiVals[rsiVals.length - 1];
+        if (pricesRef.current.length <= currentParameters.rsiPeriod) return;
+        const rsiVals = RSI.calculate({ values: pricesRef.current, period: currentParameters.rsiPeriod });
+        const currentRSI = rsiVals[rsiVals.length - 1];
+        if (currentRSI === undefined) return;
 
-          if (currentRSI < currentParameters.rsiBuy && paperPosition === 0) {
-             if (mode === 'PAPER') {
-               const qty = paperBalance / currentPrice;
-               setPaperPosition(qty);
-               setPaperBalance(0);
-               addLog(`매수 (PAPER) at $${currentPrice.toFixed(2)} (RSI: ${currentRSI.toFixed(1)})`);
-             } else {
-               if (realBalance > 10) { // minimum order size protection
-                 try {
-                   // Full balance market buy for simplicity in this demo logic
-                   const amount = realBalance / currentPrice;
-                   await ipcRenderer.invoke('ccxt-create-market-order', {
-                     exchange: exchange.toLowerCase(),
-                     apiKey,
-                     secret: apiSecret,
-                     symbol: coin,
-                     side: 'buy',
-                     amount: amount * 0.99 // leave some room for fees
-                   });
-                   addLog(`실전 매수 완료 (REAL): ${currentPrice.toFixed(2)}`);
-                 } catch(e: any) {
-                   addLog(`실전 매수 실패: ${e.message}`);
-                 }
-               }
-             }
-          } else if (currentRSI > currentParameters.rsiSell && paperPosition > 0) {
-             if (mode === 'PAPER') {
-               const newBalance = paperPosition * currentPrice;
-               const pnl = newBalance - 10000;
-               setPaperBalance(newBalance);
-               setPaperPosition(0);
-               addLog(`매도 (PAPER) at $${currentPrice.toFixed(2)} | PnL: $${pnl.toFixed(2)} (RSI: ${currentRSI.toFixed(1)})`);
-               if (pnl < 0 && newBalance < 10000) evaluateAndReflect(Math.abs(pnl));
-             } else {
-               try {
-                 // In a complete implementation, we'd fetch actual position size.
-                 // Assuming selling all held position for demo.
-                 await ipcRenderer.invoke('ccxt-create-market-order', {
-                   exchange: exchange.toLowerCase(),
-                   apiKey,
-                   secret: apiSecret,
-                   symbol: coin,
-                   side: 'sell',
-                   amount: paperPosition // Normally actual position size from fetchPositions
-                 });
-                 addLog(`실전 매도 완료 (REAL): ${currentPrice.toFixed(2)}`);
-               } catch(e: any) {
-                 addLog(`실전 매도 실패: ${e.message}`);
-               }
-             }
+        const isBuySignal = currentRSI < currentParameters.rsiBuy;
+        const isSellSignal = currentRSI > currentParameters.rsiSell;
+        if (!isBuySignal && !isSellSignal) return;
+
+        if (mode === 'PAPER') {
+          if (isBuySignal && paperPosition === 0 && paperBalance > 0) {
+            setPaperPosition(paperBalance / currentPrice);
+            setPaperEntryCost(paperBalance);
+            setPaperBalance(0);
+            addLog(`매수 (PAPER) at $${currentPrice.toFixed(2)} (RSI: ${currentRSI.toFixed(1)})`);
+          } else if (isSellSignal && paperPosition > 0) {
+            const newBalance = paperPosition * currentPrice;
+            const pnl = newBalance - paperEntryCost;
+            setPaperBalance(newBalance);
+            setPaperPosition(0);
+            setPaperEntryCost(0);
+            addLog(`매도 (PAPER) at $${currentPrice.toFixed(2)} | PnL: $${pnl.toFixed(2)} (RSI: ${currentRSI.toFixed(1)})`);
+            if (pnl < 0) evaluateAndReflect(Math.abs(pnl));
           }
+          return;
+        }
+
+        // REAL mode: always decide on the exchange's actual position
+        const creds = { exchange: exchange.toLowerCase(), apiKey, secret: apiSecret, symbol: coin };
+        const position: number = await ipcRenderer.invoke('ccxt-fetch-position', creds);
+        setRealPosition(position);
+
+        try {
+          if (isBuySignal && position === 0) {
+            if (realBalance <= 10) return; // minimum order size protection
+            await ipcRenderer.invoke('ccxt-create-market-order', {
+              ...creds,
+              side: 'buy',
+              amount: (realBalance / currentPrice) * 0.99 // leave some room for fees
+            });
+            addLog(`실전 매수 완료 (REAL): ${currentPrice.toFixed(2)} (RSI: ${currentRSI.toFixed(1)})`);
+          } else if (isSellSignal && position > 0) {
+            await ipcRenderer.invoke('ccxt-create-market-order', {
+              ...creds,
+              side: 'sell',
+              amount: position,
+              reduceOnly: true
+            });
+            addLog(`실전 매도 완료 (REAL): ${currentPrice.toFixed(2)} (RSI: ${currentRSI.toFixed(1)})`);
+          } else {
+            return;
+          }
+          setRealPosition(await ipcRenderer.invoke('ccxt-fetch-position', creds));
+          setRealBalance(await ipcRenderer.invoke('ccxt-fetch-balance', creds));
+        } catch (e: any) {
+          addLog(`실전 주문 실패: ${e.message}`);
         }
       } catch (err) {
         console.error("Error fetching price for bot:", err);
+      } finally {
+        busy = false;
       }
     }, 3000); // Check every 3 seconds
 
     return () => clearInterval(interval);
-  }, [isActive, paperPosition, paperBalance, aiEnabled, openaiKey, currentParameters, coin]);
+  }, [isActive, coin, exchange, ipcRenderer]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '8px' }}>
@@ -443,7 +472,7 @@ const TradingWidget: React.FC<Props> = ({ coin, exchange }) => {
         <div>
           <div style={{ fontSize: '10px', opacity: 0.6 }}>보유 포지션 ({coin})</div>
           <div style={{ fontSize: '16px', fontWeight: 'bold' }}>
-            {mode === 'PAPER' ? paperPosition.toFixed(4) : '-'} {/* Real position size requires further ccxt fetchPositions logic */}
+            {(mode === 'PAPER' ? paperPosition : realPosition).toFixed(4)}
           </div>
         </div>
       </div>

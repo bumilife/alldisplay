@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { createChart, ColorType } from 'lightweight-charts';
+import { createChart, ColorType, CandlestickSeries, LineSeries } from 'lightweight-charts';
 import axios from 'axios';
 
 type Timeframe = '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
@@ -13,7 +13,6 @@ const { ipcRenderer } = (window as any).require('electron');
 
 const ChartWidget: React.FC<Props> = ({ coin, exchange }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
-  const [chart, setChart] = useState<any>(null);
   const [candlestickSeries, setCandlestickSeries] = useState<any>(null);
   const [sma10Series, setSma10Series] = useState<any>(null);
   const [sma30Series, setSma30Series] = useState<any>(null);
@@ -25,8 +24,8 @@ const ChartWidget: React.FC<Props> = ({ coin, exchange }) => {
     if (!chartContainerRef.current) return;
 
     const handleResize = () => {
-      if (chartContainerRef.current && chart) {
-        chart.applyOptions({ width: chartContainerRef.current.clientWidth });
+      if (chartContainerRef.current) {
+        newChart.applyOptions({ width: chartContainerRef.current.clientWidth });
       }
     };
 
@@ -47,7 +46,7 @@ const ChartWidget: React.FC<Props> = ({ coin, exchange }) => {
       },
     });
 
-    const newCandleSeries = newChart.addCandlestickSeries({
+    const newCandleSeries = newChart.addSeries(CandlestickSeries, {
       upColor: '#26a69a',
       downColor: '#ef5350',
       borderVisible: false,
@@ -55,10 +54,9 @@ const ChartWidget: React.FC<Props> = ({ coin, exchange }) => {
       wickDownColor: '#ef5350',
     });
 
-    const newSma10 = newChart.addLineSeries({ color: '#2962FF', lineWidth: 1, title: 'SMA 10' });
-    const newSma30 = newChart.addLineSeries({ color: '#FF6D00', lineWidth: 1, title: 'SMA 30' });
+    const newSma10 = newChart.addSeries(LineSeries, { color: '#2962FF', lineWidth: 1, title: 'SMA 10' });
+    const newSma30 = newChart.addSeries(LineSeries, { color: '#FF6D00', lineWidth: 1, title: 'SMA 30' });
 
-    setChart(newChart);
     setCandlestickSeries(newCandleSeries);
     setSma10Series(newSma10);
     setSma30Series(newSma30);

@@ -284,7 +284,7 @@ const App: React.FC = () => {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: '16px', flex: 1, overflow: 'hidden' }}>
             {/* Left Side: Chart & Backtest */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', overflowY: 'auto' }}>
-              <ChartWidget coin={selectedCoin} />
+              <ChartWidget coin={selectedCoin} exchange={activeTab} />
               <BacktestWidget coin={selectedCoin} exchange={activeTab} />
             </div>
 
